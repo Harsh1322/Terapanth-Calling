@@ -1,9 +1,17 @@
 from django import forms
-from django.contrib.auth.forms import AuthenticationForm
 from .models import User
-class MobileLoginForm(AuthenticationForm):
-    username = forms.CharField(label="Mobile number", widget=forms.TextInput(attrs={"autocomplete":"username", "placeholder":"Mobile number"}))
-    password = forms.CharField(label="Password", widget=forms.PasswordInput(attrs={"autocomplete":"current-password"}))
+
+
+class MobileLoginForm(forms.Form):
+    mobile = forms.CharField(
+        label="Mobile number",
+        widget=forms.TextInput(attrs={"autocomplete": "username", "placeholder": "Mobile number"}),
+    )
+    password = forms.CharField(
+        label="Password",
+        required=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
+    )
 class MemberForm(forms.Form):
     mobile = forms.CharField(max_length=20)
     display_name = forms.CharField(max_length=120)

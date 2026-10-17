@@ -19,10 +19,23 @@ def is_admin(user):
 def login_view(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
-    form = MobileLoginForm(request, data=request.POST or None)
+    form = MobileLoginForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        login(request, form.get_user())
-        return redirect("dashboard")
+        mobile = re.sub(r"\D", "", form.cleaned_data["mobile"])
+        admin_mobile = re.sub(r"\D", "", settings.ADMIN_MOBILE)
+        admin = User.objects.filter(mobile=mobile, is_superuser=True, is_active=True).first()
+        if admin and mobile == admin_mobile:
+            login(request, admin)
+            return redirect("dashboard")
+        if not form.cleaned_data["password"]:
+            form.add_error("password", "Enter your password to sign in as a committee member.")
+        else:
+            user = authenticate(request, username=mobile, password=form.cleaned_data["password"])
+            if user is None:
+                form.add_error(None, "Invalid mobile number or password.")
+            else:
+                login(request, user)
+                return redirect("dashboard")
     return render(request, "login.html", {"form": form})
 
 def logout_view(request):

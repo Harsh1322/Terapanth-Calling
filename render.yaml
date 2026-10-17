@@ -23,5 +23,3 @@ services:
         value: ".onrender.com"
       - key: ADMIN_MOBILE
         value: "7338884040"
-      - key: ADMIN_INITIAL_PASSWORD
-        sync: false

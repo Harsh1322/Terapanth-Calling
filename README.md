@@ -13,28 +13,29 @@ Django/PostgreSQL app for committee contact assignments, status tracking, audit 
 1. Python 3.11+ recommended.
 2. `python -m venv .venv` then activate it.
 3. `pip install -r requirements.txt`
-4. Copy `.env.example` to `.env`, set `SECRET_KEY`, `ADMIN_INITIAL_PASSWORD`; optionally configure PostgreSQL `DATABASE_URL`.
+4. Copy `.env.example` to `.env`, set `SECRET_KEY`; optionally configure PostgreSQL `DATABASE_URL`.
 5. `python manage.py makemigrations tracker`
 6. `python manage.py migrate`
 7. `python manage.py bootstrap_admin`
 8. `python manage.py runserver`
 
-The first admin uses mobile `7338884040` and `ADMIN_INITIAL_PASSWORD`. Set a strong password.
+The first admin uses the configured `ADMIN_MOBILE` (default `7338884040`) and signs in without a password. Committee-member accounts still use passwords. `ADMIN_INITIAL_PASSWORD` is optional if you also want the admin to have a password.
 
 ## Browser extension install (Chrome/Edge)
 1. Open `chrome://extensions` (or `edge://extensions`).
 2. Enable Developer mode.
 3. Choose **Load unpacked** and select the `whatsapp-extension` directory.
-4. Open WhatsApp Web, open the relevant group, open its participant list and scroll through the list.
-5. Click the extension, scan visible participants, then download CSV.
+4. Click **Open WhatsApp Web**, then sign in to your own WhatsApp account.
+5. Open the group you want to import, open its participant list, and scroll through the list.
+6. Click the extension, optionally label the group, scan visible participants, then download CSV.
 6. Sign in to the tracker as admin and upload that CSV.
 
 ## Deploy to Render
 1. Create a new empty GitHub repository and push this project.
 2. In Render, create a Blueprint from the repository and review the PostgreSQL/web service plans and current pricing.
-3. Set the secret environment variable `ADMIN_INITIAL_PASSWORD` in Render before deploy.
-4. Deploy; the startup command runs migrations and initializes the admin.
-5. Change the initial password after first login. Never commit `.env` or secrets.
+3. Set `ADMIN_MOBILE` to the number that will use administrator access; the default is `7338884040`.
+4. Deploy; the startup command runs migrations and initializes the admin account.
+5. Open the Render URL and sign in with that mobile number. Never commit `.env` or secrets.
 
 ## CSV/XLSX columns
 Recognized phone columns include `phone`, `mobile`, `mobile number`, `phone number`, `number`, `telephone`; names can be `name`, `full name`, `contact name`. Optional `group` / `group name` is retained. Phone numbers are normalized and duplicate phone numbers skipped.

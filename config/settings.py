@@ -52,3 +52,4 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
 
 AUTH_USER_MODEL = 'tracker.User'
+ADMIN_MOBILE = os.getenv("ADMIN_MOBILE", "7338884040")

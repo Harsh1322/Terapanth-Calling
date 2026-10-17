@@ -22,7 +22,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (seen.has(key)) continue;
     seen.add(key);
     const name = title && !phoneFromText(title) ? title : text.replace(phone,'').trim().split('\n')[0];
-    contacts.push({name: name.slice(0,180), phone, group: document.title.replace(/\s*-\s*WhatsApp.*$/i,'').trim()});
+    const detectedGroup = document.title.replace(/\s*-\s*WhatsApp.*$/i,'').trim();
+    contacts.push({name: name.slice(0,180), phone, group: (msg.groupName || detectedGroup).slice(0,180)});
   }
   sendResponse({contacts});
   return true;
