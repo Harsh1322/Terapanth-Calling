@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Committee Tracker - WhatsApp Group Import",
+  "version": "0.1.0",
+  "description": "Collect visible participant names and phone numbers from a WhatsApp Web group after you initiate extraction.",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "action": {"default_popup": "popup.html"},
+  "content_scripts": [{"matches": ["https://web.whatsapp.com/*"], "js": ["content.js"], "run_at": "document_idle"}]
+}
