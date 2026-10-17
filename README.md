@@ -19,7 +19,7 @@ Django/PostgreSQL app for committee contact assignments, status tracking, audit 
 7. `python manage.py bootstrap_admin`
 8. `python manage.py runserver`
 
-The first admin uses the configured `ADMIN_MOBILE` (default `7338884040`) and signs in without a password. Committee-member accounts still use passwords. `ADMIN_INITIAL_PASSWORD` is optional if you also want the admin to have a password.
+The first admin uses the configured `ADMIN_MOBILE` (default `7338884040`). Every active account signs in with its registered mobile number only.
 
 ## Browser extension install (Chrome/Edge)
 1. Open `chrome://extensions` (or `edge://extensions`).

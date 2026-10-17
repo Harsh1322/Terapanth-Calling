@@ -7,11 +7,6 @@ class MobileLoginForm(forms.Form):
         label="Mobile number",
         widget=forms.TextInput(attrs={"autocomplete": "username", "placeholder": "Mobile number"}),
     )
-    password = forms.CharField(
-        label="Password",
-        required=False,
-        widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
-    )
 class MemberForm(forms.Form):
     mobile = forms.CharField(max_length=20)
     display_name = forms.CharField(max_length=120)

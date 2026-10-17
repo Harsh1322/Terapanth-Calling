@@ -19,10 +19,8 @@ class LoginAndContactFlowTests(TestCase):
         self.assertRedirects(response, reverse("dashboard"))
         self.assertContains(self.client.get(reverse("dashboard")), "All committee contacts and progress")
 
-    def test_member_requires_password_and_can_update_assigned_contact(self):
-        denied = self.client.post(reverse("login"), {"mobile": self.member.mobile, "password": ""})
-        self.assertContains(denied, "Enter your password")
-        response = self.client.post(reverse("login"), {"mobile": self.member.mobile, "password": "member-password"})
+    def test_member_can_sign_in_with_mobile_only_and_update_assigned_contact(self):
+        response = self.client.post(reverse("login"), {"mobile": self.member.mobile})
         self.assertRedirects(response, reverse("dashboard"))
         updated = self.client.post(
             reverse("update_status", args=[self.contact.id]),
