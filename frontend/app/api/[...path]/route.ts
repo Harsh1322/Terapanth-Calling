@@ -32,7 +32,21 @@ async function proxyToFlask(request: Request, context: RouteContext) {
 
   const responseHeaders = new Headers();
   upstream.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== "set-cookie") responseHeaders.set(key, value);
+    const header = key.toLowerCase();
+    if (
+      ![
+        "connection",
+        "content-encoding",
+        "content-length",
+        "keep-alive",
+        "proxy-connection",
+        "set-cookie",
+        "transfer-encoding",
+        "upgrade",
+      ].includes(header)
+    ) {
+      responseHeaders.set(key, value);
+    }
   });
   const getSetCookie = (
     upstream.headers as Headers & { getSetCookie?: () => string[] }
