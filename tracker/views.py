@@ -1,228 +1,455 @@
-import csv, io, json, re
-from collections import defaultdict
-from django.contrib import messages
-from django.contrib.auth import login, logout
-from django.contrib.auth.decorators import login_required, user_passes_test
-from django.contrib.auth.models import Group
-from django.db import transaction
-from django.http import HttpResponse, JsonResponse, HttpResponseBadRequest
-from django.shortcuts import render, redirect, get_object_or_404
-from django.views.decorators.http import require_POST
+import csv
+import io
+import json
+import re
+from functools import wraps
+from zipfile import BadZipFile
+
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    url_for,
+)
+from flask_login import current_user, login_required, login_user, logout_user
 from openpyxl import Workbook, load_workbook
-from .models import User, Contact, AuditLog
-from .forms import MobileLoginForm, MemberForm
+from openpyxl.utils.exceptions import InvalidFileException
+from sqlalchemy import func, select
 
-def is_admin(user):
-    return user.is_authenticated and user.is_superuser
+from .extensions import db
+from .models import AuditLog, Contact, User
 
-def login_view(request):
-    if request.user.is_authenticated:
-        return redirect("dashboard")
-    form = MobileLoginForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        mobile = re.sub(r"\D", "", form.cleaned_data["mobile"])
-        user = User.objects.filter(mobile=mobile, is_active=True).first()
-        if user is None:
-            form.add_error("mobile", "No active account uses that mobile number.")
-        else:
-            login(request, user)
-            return redirect("dashboard")
-    return render(request, "login.html", {"form": form})
+tracker = Blueprint("tracker", __name__)
 
-def logout_view(request):
-    logout(request)
-    return redirect("login")
 
-@login_required
-def dashboard(request):
-    contacts = Contact.objects.select_related("assigned_to").order_by("name", "phone")
-    if not request.user.is_superuser:
-        contacts = contacts.filter(assigned_to=request.user)
-    stats = {
-        "total": contacts.count(),
-        "pending": contacts.filter(status="pending").count(),
-        "success": contacts.filter(status="success").count(),
-        "no_answer": contacts.filter(status="no_answer").count(),
-        "invalid": contacts.filter(status="invalid").count(),
-        "follow_up": contacts.filter(status="follow_up").count(),
-    }
-    members = User.objects.filter(is_committee_member=True, is_active=True).order_by("username")
-    if request.user.is_superuser:
-        member_stats = []
-        for member in members:
-            qs = Contact.objects.filter(assigned_to=member)
-            member_stats.append({"member": member, "total": qs.count(), "success": qs.filter(status="success").count(),
-                "pending": qs.filter(status__in=["pending","follow_up","no_answer"]).count(), "invalid": qs.filter(status="invalid").count()})
-    else:
-        member_stats = []
-    return render(request, "dashboard.html", {"contacts": contacts[:500], "stats": stats, "member_stats": member_stats})
+def admin_required(view):
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not current_user.is_superuser:
+            abort(403)
+        return view(*args, **kwargs)
 
-@login_required
-@user_passes_test(is_admin)
-def members(request):
+    return wrapped
+
+
+@tracker.route("/login/", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("tracker.dashboard"))
+    error = None
+    mobile_value = ""
     if request.method == "POST":
-        form = MemberForm(request.POST)
-        if form.is_valid():
-            mobile = re.sub(r"\D", "", form.cleaned_data["mobile"])
-            if User.objects.filter(mobile=mobile).exists():
-                messages.error(request, "A user with that mobile number already exists.")
-            else:
-                user = User.objects.create_user(username=form.cleaned_data["display_name"], mobile=mobile,
-                    password=form.cleaned_data["password"], is_committee_member=True)
-                AuditLog.objects.create(actor=request.user, action="member_added", details=f"Added member {mobile}")
-                messages.success(request, f"Member {mobile} created.")
-                return redirect("members")
-    else:
-        form = MemberForm()
-    return render(request, "members.html", {"form": form, "members": User.objects.filter(is_committee_member=True).order_by("username")})
+        mobile_value = request.form.get("mobile", "")
+        mobile = re.sub(r"\D", "", mobile_value)
+        user = db.session.scalar(
+            select(User).where(User.mobile == mobile, User.is_active.is_(True))
+        )
+        if user is None:
+            error = "No active account uses that mobile number."
+        else:
+            login_user(user)
+            return redirect(url_for("tracker.dashboard"))
+    return render_template("login.html", error=error, mobile=mobile_value)
 
+
+@tracker.route("/logout/")
 @login_required
-@user_passes_test(is_admin)
-@require_POST
-def delete_member(request, user_id):
-    user = get_object_or_404(User, id=user_id, is_committee_member=True)
+def logout():
+    logout_user()
+    return redirect(url_for("tracker.login"))
+
+
+@tracker.route("/")
+@login_required
+def dashboard():
+    stats_query = select(Contact.status, func.count(Contact.id)).group_by(Contact.status)
+    contact_query = select(Contact).order_by(Contact.name, Contact.phone).limit(500)
+    if not current_user.is_superuser:
+        stats_query = stats_query.where(Contact.assigned_to_id == current_user.id)
+        contact_query = contact_query.where(Contact.assigned_to_id == current_user.id)
+    status_counts = dict(db.session.execute(stats_query).all())
+    stats = {
+        "total": sum(status_counts.values()),
+        "pending": status_counts.get("pending", 0),
+        "success": status_counts.get("success", 0),
+        "no_answer": status_counts.get("no_answer", 0),
+        "invalid": status_counts.get("invalid", 0),
+        "follow_up": status_counts.get("follow_up", 0),
+    }
+    contacts = db.session.scalars(contact_query).all()
+    members = db.session.scalars(
+        select(User)
+        .where(User.is_committee_member.is_(True), User.is_active.is_(True))
+        .order_by(User.username)
+    ).all()
+    member_stats = []
+    if current_user.is_superuser:
+        assignment_counts = {}
+        results = db.session.execute(
+            select(Contact.assigned_to_id, Contact.status, func.count(Contact.id))
+            .group_by(Contact.assigned_to_id, Contact.status)
+        ).all()
+        for member_id, status, count in results:
+            assignment_counts.setdefault(member_id, {})[status] = count
+        for member in members:
+            counts = assignment_counts.get(member.id, {})
+            member_stats.append(
+                {
+                    "member": member,
+                    "total": sum(counts.values()),
+                    "success": counts.get("success", 0),
+                    "pending": sum(
+                        counts.get(status, 0)
+                        for status in ("pending", "follow_up", "no_answer")
+                    ),
+                    "invalid": counts.get("invalid", 0),
+                }
+            )
+    return render_template(
+        "dashboard.html",
+        contacts=contacts,
+        stats=stats,
+        member_stats=member_stats,
+    )
+
+
+@tracker.route("/members/", methods=["GET", "POST"])
+@admin_required
+def members():
+    if request.method == "POST":
+        mobile = re.sub(r"\D", "", request.form.get("mobile", ""))
+        display_name = request.form.get("display_name", "").strip()
+        password = request.form.get("password", "")
+        if (
+            not mobile
+            or len(mobile) > 20
+            or not display_name
+            or len(display_name) > 150
+        ):
+            flash("Enter a valid mobile number and a name of at most 150 characters.", "error")
+        elif len(password) < 8:
+            flash("The password must contain at least 8 characters.", "error")
+        elif db.session.scalar(select(User.id).where(User.mobile == mobile)) is not None:
+            flash("A user with that mobile number already exists.", "error")
+        else:
+            user = User(
+                username=display_name,
+                mobile=mobile,
+                is_committee_member=True,
+            )
+            user.set_password(password)
+            db.session.add(user)
+            db.session.add(
+                AuditLog(
+                    actor=current_user,
+                    action="member_added",
+                    details=f"Added member {mobile}",
+                )
+            )
+            db.session.commit()
+            flash(f"Member {mobile} created.", "success")
+            return redirect(url_for("tracker.members"))
+    member_list = db.session.scalars(
+        select(User)
+        .where(User.is_committee_member.is_(True))
+        .order_by(User.username)
+    ).all()
+    return render_template("members.html", members=member_list)
+
+
+@tracker.route("/members/<int:user_id>/delete/", methods=["POST"])
+@admin_required
+def delete_member(user_id):
+    user = db.session.scalar(
+        select(User).where(
+            User.id == user_id,
+            User.is_committee_member.is_(True),
+        )
+    )
+    if user is None:
+        abort(404)
     mobile = user.mobile
     user.is_active = False
-    user.save(update_fields=["is_active"])
-    AuditLog.objects.create(actor=request.user, action="member_deactivated", details=f"Deactivated {mobile}; contact ownership retained")
-    messages.success(request, "Member deactivated. Existing assignments were retained for audit.")
-    return redirect("members")
+    db.session.add(
+        AuditLog(
+            actor=current_user,
+            action="member_deactivated",
+            details=f"Deactivated {mobile}; contact ownership retained",
+        )
+    )
+    db.session.commit()
+    flash("Member deactivated. Existing assignments were retained for audit.", "success")
+    return redirect(url_for("tracker.members"))
+
 
 def normalize_phone(raw):
-    s = re.sub(r"[^0-9+]", "", str(raw or ""))
-    digits = re.sub(r"\D", "", s)
+    value = re.sub(r"[^0-9+]", "", str(raw or ""))
+    digits = re.sub(r"\D", "", value)
     if len(digits) == 10:
         return "+91" + digits
     if len(digits) == 12 and digits.startswith("91"):
         return "+" + digits
-    if s.startswith("+") and len(digits) >= 8:
+    if value.startswith("+") and len(digits) >= 8:
         return "+" + digits
     return digits
 
+
 def read_rows(upload):
-    name = upload.name.lower()
-    if name.endswith(".csv"):
+    filename = upload.filename.lower()
+    if filename.endswith(".csv"):
         content = upload.read().decode("utf-8-sig", errors="replace")
         return list(csv.DictReader(io.StringIO(content)))
-    if name.endswith(".xlsx"):
-        wb = load_workbook(upload, read_only=True, data_only=True)
-        ws = wb.active
-        rows = ws.iter_rows(values_only=True)
-        headers = [str(v or "").strip().lower() for v in next(rows, [])]
+    if filename.endswith(".xlsx"):
+        workbook = load_workbook(upload, read_only=True, data_only=True)
+        worksheet = workbook.active
+        rows = worksheet.iter_rows(values_only=True)
+        headers = [str(value or "").strip().lower() for value in next(rows, [])]
         return [dict(zip(headers, row)) for row in rows]
     raise ValueError("Upload a .csv or .xlsx file.")
 
+
 def field(row, choices):
-    normalized = {re.sub(r"[^a-z0-9]", "", str(k).lower()): v for k,v in row.items()}
+    normalized = {
+        re.sub(r"[^a-z0-9]", "", str(key).lower()): value
+        for key, value in row.items()
+    }
     for key in choices:
         if key in normalized and normalized[key] is not None:
             return str(normalized[key]).strip()
     return ""
 
-@login_required
-@user_passes_test(is_admin)
-def import_contacts(request):
-    if request.method != "POST" or "file" not in request.FILES:
-        return HttpResponseBadRequest("Upload a CSV or XLSX file.")
+
+@tracker.route("/contacts/import/", methods=["POST"])
+@admin_required
+def import_contacts():
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return Response("Upload a CSV or XLSX file.", status=400)
     try:
-        rows = read_rows(request.FILES["file"])
-    except Exception as exc:
-        messages.error(request, f"Could not read file: {exc}")
-        return redirect("dashboard")
-    cleaned, seen = [], set()
+        rows = read_rows(upload)
+    except (ValueError, BadZipFile, InvalidFileException, OSError) as error:
+        flash(f"Could not read file: {error}", "error")
+        return redirect(url_for("tracker.dashboard"))
+
+    cleaned = []
+    seen = set()
     for row in rows:
-        phone = normalize_phone(field(row, ["phone","mobile","mobilenumber","phonenumber","number","telephone"]))
+        phone = normalize_phone(
+            field(row, ["phone", "mobile", "mobilenumber", "phonenumber", "number", "telephone"])
+        )
         if not phone or phone in seen:
             continue
         seen.add(phone)
-        cleaned.append({"phone": phone, "name": field(row, ["name","fullname","contactname","displayname"]),
-                        "group": field(row, ["group","groupname","sourcegroup"])})
-    existing = set(Contact.objects.filter(phone__in=[x["phone"] for x in cleaned]).values_list("phone", flat=True))
-    new_rows = [x for x in cleaned if x["phone"] not in existing]
-    members = list(User.objects.filter(is_committee_member=True, is_active=True).order_by("id"))
-    if not members and new_rows:
-        messages.error(request, "Add at least one active committee member before importing contacts.")
-        return redirect("dashboard")
-    counts = defaultdict(int)
-    created = 0
-    with transaction.atomic():
-        for i, item in enumerate(new_rows):
-            member = members[i % len(members)]
-            Contact.objects.create(name=item["name"][:180], phone=item["phone"], source_group=item["group"][:180], assigned_to=member)
-            counts[member.id] += 1
-            created += 1
-        AuditLog.objects.create(actor=request.user, action="contacts_imported", details=f"Rows read={len(rows)}, unique valid={len(cleaned)}, created={created}, duplicates skipped={len(rows)-created}")
-    messages.success(request, f"Imported {created} new contacts. {len(rows)-created} duplicates/invalid or already-existing entries were skipped.")
-    return redirect("dashboard")
+        cleaned.append(
+            {
+                "phone": phone,
+                "name": field(row, ["name", "fullname", "contactname", "displayname"]),
+                "group": field(row, ["group", "groupname", "sourcegroup"]),
+            }
+        )
 
+    existing = set(
+        db.session.scalars(
+            select(Contact.phone).where(Contact.phone.in_([item["phone"] for item in cleaned]))
+        ).all()
+    )
+    new_rows = [item for item in cleaned if item["phone"] not in existing]
+    member_list = db.session.scalars(
+        select(User)
+        .where(User.is_committee_member.is_(True), User.is_active.is_(True))
+        .order_by(User.id)
+    ).all()
+    if not member_list and new_rows:
+        flash("Add at least one active committee member before importing contacts.", "error")
+        return redirect(url_for("tracker.dashboard"))
+
+    for index, item in enumerate(new_rows):
+        member = member_list[index % len(member_list)]
+        db.session.add(
+            Contact(
+                name=item["name"][:180],
+                phone=item["phone"],
+                source_group=item["group"][:180],
+                assigned_to=member,
+            )
+        )
+    db.session.add(
+        AuditLog(
+            actor=current_user,
+            action="contacts_imported",
+            details=(
+                f"Rows read={len(rows)}, unique valid={len(cleaned)}, "
+                f"created={len(new_rows)}, duplicates skipped={len(rows)-len(new_rows)}"
+            ),
+        )
+    )
+    db.session.commit()
+    flash(
+        f"Imported {len(new_rows)} new contacts. "
+        f"{len(rows)-len(new_rows)} duplicates/invalid or already-existing entries were skipped.",
+        "success",
+    )
+    return redirect(url_for("tracker.dashboard"))
+
+
+@tracker.route("/contacts/<int:contact_id>/status/", methods=["POST"])
 @login_required
-@require_POST
-def update_status(request, contact_id):
-    contact = get_object_or_404(Contact, id=contact_id)
-    if not request.user.is_superuser and contact.assigned_to_id != request.user.id:
-        return HttpResponse("Forbidden", status=403)
-    status = request.POST.get("status")
-    destination = request.POST.get("destination", "")
-    allowed = dict(Contact.STATUS_CHOICES)
-    if status not in allowed:
-        return HttpResponseBadRequest("Invalid status")
-    if status == "success" and destination not in dict(Contact.DESTINATION_CHOICES):
-        return HttpResponseBadRequest("Choose Chennai, Kilpauk, or TYP for a successful contact.")
+def update_status(contact_id):
+    contact = db.session.get(Contact, contact_id)
+    if contact is None:
+        abort(404)
+    if not current_user.is_superuser and contact.assigned_to_id != current_user.id:
+        abort(403)
+    status = request.form.get("status")
+    destination = request.form.get("destination", "")
+    allowed_statuses = dict(Contact.STATUS_CHOICES)
+    allowed_destinations = dict(Contact.DESTINATION_CHOICES)
+    if status not in allowed_statuses:
+        return Response("Invalid status", status=400)
+    if status == "success" and destination not in allowed_destinations:
+        return Response(
+            "Choose Chennai, Kilpauk, or TYP for a successful contact.",
+            status=400,
+        )
     if status != "success":
         destination = ""
-    old = f"{contact.status}/{contact.destination}"
-    contact.status, contact.destination = status, destination
-    contact.notes = request.POST.get("notes", "")[:500]
-    contact.save()
-    AuditLog.objects.create(actor=request.user, contact=contact, action="status_updated", details=f"{old} -> {status}/{destination}")
-    messages.success(request, "Contact status updated.")
-    return redirect("dashboard")
+    previous = f"{contact.status}/{contact.destination}"
+    contact.status = status
+    contact.destination = destination
+    contact.notes = request.form.get("notes", "")[:500]
+    db.session.add(
+        AuditLog(
+            actor=current_user,
+            contact=contact,
+            action="status_updated",
+            details=f"{previous} -> {status}/{destination}",
+        )
+    )
+    db.session.commit()
+    flash("Contact status updated.", "success")
+    return redirect(url_for("tracker.dashboard"))
 
-@login_required
-@user_passes_test(is_admin)
-def export_excel(request):
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "All Contacts"
-    ws.append(["Name","Mobile","Assigned Member","Member Mobile","Status","Success Destination","Source Group","Created At","Last Updated"])
-    for c in Contact.objects.select_related("assigned_to").order_by("phone"):
-        ws.append([c.name, c.phone, c.assigned_to.username if c.assigned_to else "", c.assigned_to.mobile if c.assigned_to else "",
-            c.get_status_display(), c.get_destination_display() if c.destination else "", c.source_group,
-            c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "", c.updated_at.strftime("%Y-%m-%d %H:%M") if c.updated_at else ""])
-    for col in ws.columns:
-        letter = col[0].column_letter
-        ws.column_dimensions[letter].width = min(max(max(len(str(cell.value or "")) for cell in col)+2, 12), 35)
-    audit = wb.create_sheet("Audit Log")
-    audit.append(["Timestamp","Actor","Action","Contact Mobile","Details"])
-    for log in AuditLog.objects.select_related("actor","contact").order_by("-created_at"):
-        audit.append([log.created_at.strftime("%Y-%m-%d %H:%M"), log.actor.mobile if log.actor else "", log.action,
-                      log.contact.phone if log.contact else "", log.details])
-    response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    response["Content-Disposition"] = 'attachment; filename="committee_contacts.xlsx"'
-    wb.save(response)
-    return response
 
-@login_required
-@user_passes_test(is_admin)
-@require_POST
-def extension_import(request):
+@tracker.route("/contacts/export.xlsx")
+@admin_required
+def export_excel():
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "All Contacts"
+    worksheet.append(
+        [
+            "Name",
+            "Mobile",
+            "Assigned Member",
+            "Member Mobile",
+            "Status",
+            "Success Destination",
+            "Source Group",
+            "Created At",
+            "Last Updated",
+        ]
+    )
+    contacts = db.session.scalars(select(Contact).order_by(Contact.phone)).all()
+    for contact in contacts:
+        worksheet.append(
+            [
+                contact.name,
+                contact.phone,
+                contact.assigned_to.username if contact.assigned_to else "",
+                contact.assigned_to.mobile if contact.assigned_to else "",
+                contact.status_display,
+                contact.destination_display if contact.destination else "",
+                contact.source_group,
+                contact.created_at.strftime("%Y-%m-%d %H:%M") if contact.created_at else "",
+                contact.updated_at.strftime("%Y-%m-%d %H:%M") if contact.updated_at else "",
+            ]
+        )
+    for column in worksheet.columns:
+        letter = column[0].column_letter
+        worksheet.column_dimensions[letter].width = min(
+            max(max(len(str(cell.value or "")) for cell in column) + 2, 12),
+            35,
+        )
+    audit_sheet = workbook.create_sheet("Audit Log")
+    audit_sheet.append(["Timestamp", "Actor", "Action", "Contact Mobile", "Details"])
+    logs = db.session.scalars(
+        select(AuditLog).order_by(AuditLog.created_at.desc())
+    ).all()
+    for log in logs:
+        audit_sheet.append(
+            [
+                log.created_at.strftime("%Y-%m-%d %H:%M"),
+                log.actor.mobile if log.actor else "",
+                log.action,
+                log.contact.phone if log.contact else "",
+                log.details,
+            ]
+        )
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="committee_contacts.xlsx",
+    )
+
+
+@tracker.route("/extension/import/", methods=["POST"])
+@admin_required
+def extension_import():
     try:
-        data = json.loads(request.body.decode("utf-8"))
+        data = json.loads(request.get_data(as_text=True))
         contacts = data.get("contacts", [])
         source = str(data.get("groupName", "WhatsApp group"))[:180]
-    except Exception:
-        return HttpResponseBadRequest("Invalid JSON")
-    members = list(User.objects.filter(is_committee_member=True, is_active=True).order_by("id"))
-    if contacts and not members:
-        return HttpResponseBadRequest("Add active committee members first.")
-    cleaned, seen = [], set()
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return Response("Invalid JSON", status=400)
+    if not isinstance(contacts, list):
+        return Response("Invalid contacts list", status=400)
+
+    member_list = db.session.scalars(
+        select(User)
+        .where(User.is_committee_member.is_(True), User.is_active.is_(True))
+        .order_by(User.id)
+    ).all()
+    if contacts and not member_list:
+        return Response("Add active committee members first.", status=400)
+    cleaned = []
+    seen = set()
     for item in contacts:
+        if not isinstance(item, dict):
+            continue
         phone = normalize_phone(item.get("phone", ""))
-        if phone and phone not in seen and not Contact.objects.filter(phone=phone).exists():
-            seen.add(phone)
-            cleaned.append((str(item.get("name",""))[:180], phone))
-    with transaction.atomic():
-        for i, (name, phone) in enumerate(cleaned):
-            Contact.objects.create(name=name, phone=phone, assigned_to=members[i % len(members)], source_group=source)
-        AuditLog.objects.create(actor=request.user, action="whatsapp_extension_import", details=f"Group={source}; created={len(cleaned)}")
-    return JsonResponse({"created": len(cleaned), "message": f"Imported {len(cleaned)} new contacts."})
+        if phone and phone not in seen:
+            exists = db.session.scalar(select(Contact.id).where(Contact.phone == phone))
+            if exists is None:
+                seen.add(phone)
+                cleaned.append((str(item.get("name", ""))[:180], phone))
+    for index, (name, phone) in enumerate(cleaned):
+        db.session.add(
+            Contact(
+                name=name,
+                phone=phone,
+                assigned_to=member_list[index % len(member_list)],
+                source_group=source,
+            )
+        )
+    db.session.add(
+        AuditLog(
+            actor=current_user,
+            action="whatsapp_extension_import",
+            details=f"Group={source}; created={len(cleaned)}",
+        )
+    )
+    db.session.commit()
+    return jsonify(
+        {"created": len(cleaned), "message": f"Imported {len(cleaned)} new contacts."}
+    )

@@ -1,1 +1,28 @@
-{% extends "base.html" %}{% block content %}<h1>Committee members</h1><div class="panel"><h2>Add member</h2><form method="post">{% csrf_token %}{{ form.as_p }}<button>Add member</button></form><p class="muted">Share the temporary password securely with the member. Member accounts can only access their own contacts.</p></div><div class="panel"><h2>Member list</h2><div class="scroll"><table><tr><th>Name</th><th>Mobile</th><th>Active</th><th>Action</th></tr>{% for m in members %}<tr><td>{{ m.username }}</td><td>{{ m.mobile }}</td><td>{{ m.is_active }}</td><td>{% if m.is_active %}<form method="post" action="/members/{{ m.id }}/delete/">{% csrf_token %}<button class="danger">Deactivate</button></form>{% endif %}</td></tr>{% empty %}<tr><td colspan="4">No members yet.</td></tr>{% endfor %}</table></div></div><p><a class="btn" href="/">Back to dashboard</a></p>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<h1>Committee members</h1>
+<div class="panel">
+  <h2>Add member</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p><label for="display_name">Name</label><br><input id="display_name" name="display_name" maxlength="150" required></p>
+    <p><label for="mobile">Mobile number</label><br><input id="mobile" name="mobile" maxlength="20" required></p>
+    <p><label for="password">Temporary password</label><br><input id="password" name="password" type="password" minlength="8" required></p>
+    <button>Add member</button>
+  </form>
+  <p class="muted">Share the temporary password securely with the member. Member accounts can only access their own contacts.</p>
+</div>
+<div class="panel">
+  <h2>Member list</h2>
+  <div class="scroll"><table>
+    <tr><th>Name</th><th>Mobile</th><th>Active</th><th>Action</th></tr>
+    {% for member in members %}
+      <tr>
+        <td>{{ member.username }}</td><td>{{ member.mobile }}</td><td>{{ member.is_active }}</td>
+        <td>{% if member.is_active %}<form method="post" action="{{ url_for('tracker.delete_member', user_id=member.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="danger">Deactivate</button></form>{% endif %}</td>
+      </tr>
+    {% else %}<tr><td colspan="4">No members yet.</td></tr>{% endfor %}
+  </table></div>
+</div>
+<p><a class="btn" href="{{ url_for('tracker.dashboard') }}">Back to dashboard</a></p>
+{% endblock %}
