@@ -5,4 +5,6 @@ __pycache__/
 .env
 staticfiles/
 db.sqlite3
+frontend/node_modules/
+frontend/.next/
 .DS_Store

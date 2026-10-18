@@ -2,7 +2,7 @@ import os
 import secrets
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, jsonify, redirect, request, url_for
 from sqlalchemy import inspect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -59,6 +59,13 @@ def create_app(test_config=None):
     csrf.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = "tracker.login"
+
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Please sign in to continue."}), 401
+        return redirect(url_for(login_manager.login_view))
+
     app.register_blueprint(tracker)
 
     @login_manager.user_loader

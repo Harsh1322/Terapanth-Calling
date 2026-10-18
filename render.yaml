@@ -23,3 +23,13 @@ services:
         value: ".onrender.com"
       - key: ADMIN_MOBILE
         value: "7338884040"
+  - type: web
+    name: committee-contact-tracker-ui
+    runtime: node
+    plan: starter
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: FLASK_API_URL
+        value: https://committee-contact-tracker.onrender.com

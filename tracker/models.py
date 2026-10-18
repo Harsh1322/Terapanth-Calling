@@ -34,12 +34,19 @@ class Contact(db.Model):
 
     STATUS_CHOICES = [
         ("pending", "Pending"),
+        ("typ_member", "TYP member"),
+        ("kilpauk_member", "Kilpauk member"),
         ("success", "Success"),
         ("no_answer", "Call didn't pick up"),
         ("invalid", "Number invalid"),
         ("follow_up", "Need to follow up"),
     ]
-    DESTINATION_CHOICES = [("chennai", "Chennai"), ("kilpauk", "Kilpauk"), ("typ", "TYP")]
+    DESTINATION_CHOICES = [
+        ("chennai", "Chennai"),
+        ("kilpauk", "Kilpauk"),
+        ("typ", "TYP"),
+        ("other", "Other / data collected"),
+    ]
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(180), nullable=False, default="")
@@ -80,3 +87,70 @@ class AuditLog(db.Model):
 
     actor = db.relationship("User")
     contact = db.relationship("Contact")
+
+
+class DataTask(db.Model):
+    __tablename__ = "tracker_data_task"
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(150), nullable=False)
+    instructions = db.Column(db.Text, nullable=False, default="")
+    fields_json = db.Column(db.Text, nullable=False, default="[]")
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    created_by_id = db.Column(db.Integer, db.ForeignKey("tracker_user.id"), nullable=True)
+
+    created_by = db.relationship("User")
+    assignments = db.relationship(
+        "DataTaskAssignment", back_populates="task", cascade="all, delete-orphan"
+    )
+    submissions = db.relationship("DataCollection", back_populates="task")
+
+
+class DataTaskAssignment(db.Model):
+    __tablename__ = "tracker_data_task_assignment"
+    __table_args__ = (
+        db.UniqueConstraint("task_id", "member_id", name="uq_task_member_assignment"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(
+        db.Integer, db.ForeignKey("tracker_data_task.id"), nullable=False, index=True
+    )
+    member_id = db.Column(db.Integer, db.ForeignKey("tracker_user.id"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    task = db.relationship("DataTask", back_populates="assignments")
+    member = db.relationship("User")
+
+
+class DataCollection(db.Model):
+    __tablename__ = "tracker_data_collection"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(
+        db.Integer, db.ForeignKey("tracker_data_task.id"), nullable=False, index=True
+    )
+    contact_id = db.Column(
+        db.Integer, db.ForeignKey("tracker_contact.id"), nullable=False, index=True
+    )
+    member_id = db.Column(db.Integer, db.ForeignKey("tracker_user.id"), nullable=False)
+    task_title = db.Column(db.String(150), nullable=False)
+    age = db.Column(db.Integer, nullable=False)
+    area = db.Column(db.String(120), nullable=False)
+    classification = db.Column(db.String(20), nullable=False)
+    fields_json = db.Column(db.Text, nullable=False, default="{}")
+    field_labels_json = db.Column(db.Text, nullable=False, default="{}")
+    submitted_at = db.Column(
+        db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    task = db.relationship("DataTask", back_populates="submissions")
+    contact = db.relationship("Contact")
+    member = db.relationship("User")
