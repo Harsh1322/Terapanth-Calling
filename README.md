@@ -14,7 +14,7 @@ Flask/PostgreSQL app for committee contact assignments, status tracking, audit h
 2. `python -m venv .venv` then activate it.
 3. `pip install -r requirements.txt`
 4. Copy `.env.example` to `.env` and set a long random `SECRET_KEY`; optionally configure PostgreSQL `DATABASE_URL`.
-5. `flask --app app init-db`
+5. `flask --app app init-db` (creates missing tables and widens an existing PostgreSQL password column)
 6. `flask --app app bootstrap-admin`
 7. `flask --app app run --debug`
 

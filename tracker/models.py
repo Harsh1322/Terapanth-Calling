@@ -10,7 +10,7 @@ class User(UserMixin, db.Model):
     __tablename__ = "tracker_user"
 
     id = db.Column(db.Integer, primary_key=True)
-    password = db.Column(db.String(128), nullable=False, default="")
+    password = db.Column(db.Text, nullable=False, default="")
     last_login = db.Column(db.DateTime, nullable=True)
     is_superuser = db.Column(db.Boolean, nullable=False, default=False)
     username = db.Column(db.String(150), nullable=False, unique=True)

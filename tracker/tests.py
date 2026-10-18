@@ -2,6 +2,8 @@ from io import BytesIO
 import re
 import unittest
 
+from sqlalchemy import Text
+
 from app import create_app
 from tracker.extensions import db
 from tracker.models import AuditLog, Contact, User
@@ -56,6 +58,19 @@ class LoginAndContactFlowTests(unittest.TestCase):
         dashboard = self.client.get("/")
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn(b"All committee contacts and progress", dashboard.data)
+
+    def test_password_column_accepts_unbounded_hashes(self):
+        self.assertIsInstance(User.__table__.c.password.type, Text)
+
+    def test_bootstrap_admin_stores_password_hash(self):
+        db.session.delete(self.admin)
+        db.session.commit()
+
+        result = self.app.test_cli_runner().invoke(args=["bootstrap-admin"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        admin = db.session.scalar(db.select(User).where(User.mobile == "7338884040"))
+        self.assertGreater(len(admin.password), 128)
 
     def test_member_can_sign_in_and_update_assigned_contact(self):
         response = self.client.post("/login/", data={"mobile": self.member.mobile})

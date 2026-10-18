@@ -3,6 +3,7 @@ import secrets
 from pathlib import Path
 
 from flask import Flask
+from sqlalchemy import inspect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from tracker.extensions import csrf, db, login_manager
@@ -70,6 +71,20 @@ def create_app(test_config=None):
     @app.cli.command("init-db")
     def init_db():
         db.create_all()
+        if db.engine.dialect.name == "postgresql":
+            columns = inspect(db.engine).get_columns("tracker_user")
+            password_column = next(
+                (column for column in columns if column["name"] == "password"),
+                None,
+            )
+            if password_column is None:
+                raise RuntimeError("The tracker_user.password column is missing.")
+            if password_column["type"].length is not None:
+                with db.engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE tracker_user "
+                        "ALTER COLUMN password TYPE TEXT"
+                    )
         print("Database tables are ready.")
 
     @app.cli.command("bootstrap-admin")
